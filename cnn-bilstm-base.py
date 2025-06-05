@@ -8,6 +8,7 @@ from PIL import Image
 from datetime import datetime, timedelta
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
+from torch.utils.data import random_split # random_split 함수 임포트 추가
 
 
 # 1) StreamCNN: 각 입력 이미지 스트림을 처리하는 CNN 블록
@@ -291,7 +292,7 @@ if __name__ == "__main__":
         full_dataset, [train_len, val_len, test_len],
         generator=torch.Generator().manual_seed(42)
     )
-
+    wildfire_collate = default_collate_fildfiew #collate_fn입력을 위해 별도로 함수명 재 정의
     # --- 3.2) DataLoader 생성 ---
     batch_size = 4  # GPU 메모리에 맞춰 조정
     train_loader = DataLoader(
