@@ -223,16 +223,18 @@ class WildfireDataset(Dataset):
         # 1) 입력 이미지들 로드
         inputs = []
         for p in input_paths:
-            img = Image.open(p)
-            img = img.convert("RGB") if img.mode != "RGB" else img  # 강제 RGB
-            # 만약 Gray(1채널)로 쓰고 싶으면 .convert("L")로 바꿔도 됨
-            tensor_img = self.transform(img)  # → (C, H, W)
+            # Image.open 이후에는 바로 닫히도록 context manager 사용
+            with Image.open(p) as img:
+                img = img.convert("RGB") if img.mode != "RGB" else img  # 강제 RGB
+                # 만약 Gray(1채널)로 쓰고 싶으면 .convert("L")로 바꿔도 됨
+                tensor_img = self.transform(img)  # → (C, H, W)
             inputs.append(tensor_img)
         # inputs: 길이 N_list, 각각 (C_i, H, W)
 
         # 2) 라벨 이미지 로드 (FF)
-        lbl = Image.open(label_path).convert("L")
-        lbl_tensor = self.transform(lbl)      # → (1, H, W) 형태
+        with Image.open(label_path) as lbl:
+            lbl = lbl.convert("L")
+            lbl_tensor = self.transform(lbl)  # → (1, H, W) 형태
         # (원한다면 0/1 이진 마스크로 변환)
         lbl_tensor = (lbl_tensor > 0.5).float()
 
