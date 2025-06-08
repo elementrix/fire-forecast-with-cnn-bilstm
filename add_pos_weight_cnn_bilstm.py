@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import os
 import glob
+import matplotlib.pyplot as plt
+import numpy as np
 
 from PIL import Image
 from datetime import datetime, timedelta
@@ -268,6 +270,59 @@ def default_collate_fildfiew(batch):
 
     return batch_inputs, batch_labels
 
+# --- [추가] 예측 결과 시각화 함수 ---
+def visualize_predictions(model, loader, device, num_samples=5, save_dir="predictions"):
+    model.eval()
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    samples_shown = 0
+    with torch.no_grad():
+        for batch_idx, (batch_inputs, batch_labels) in enumerate(loader):
+            if samples_shown >= num_samples:
+                break
+            batch_inputs_device = [bi.to(device) for bi in batch_inputs]
+
+            outputs_logits = model(batch_inputs_device)
+            outputs_probs = torch.sigmoid(outputs_logits)
+            predicted_masks = (outputs_probs > 0.5).float()
+
+            for i in range(batch_inputs[0].size(0)): # Process each image in the batch
+                if samples_shown >= num_samples:
+                    break
+
+                # 사용자가 제공한 원본 코드의 입력 처리 방식에 맞춤
+                # batch_inputs[0]은 첫 번째 스트림의 (B, C, H, W) 텐서
+                # i번째 샘플의 첫 번째 스트림 이미지
+                input_img_tensor = batch_inputs[0][i].cpu()
+                if input_img_tensor.shape[0] == 3: # RGB
+                    input_img_np = input_img_tensor.permute(1, 2, 0).numpy()
+                else: # Grayscale
+                    input_img_np = input_img_tensor.squeeze().numpy()
+
+                label_mask_np = batch_labels[i].cpu().squeeze().numpy()
+                pred_mask_np = predicted_masks[i].cpu().squeeze().numpy()
+
+                fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+                fig.suptitle(f"Prediction Example {samples_shown + 1}", fontsize=16)
+
+                axes[0].imshow(input_img_np, cmap='gray' if input_img_np.ndim == 2 else None)
+                axes[0].set_title("Input Image (Stream 0)", fontsize=14); axes[0].axis('off')
+
+                axes[1].imshow(label_mask_np, cmap='gray', vmin=0, vmax=1)
+                axes[1].set_title("Ground Truth Mask", fontsize=14); axes[1].axis('off')
+
+                axes[2].imshow(pred_mask_np, cmap='gray', vmin=0, vmax=1)
+                axes[2].set_title("Predicted Mask", fontsize=14); axes[2].axis('off')
+
+                plt.tight_layout(rect=[0, 0, 1, 0.96])
+                save_path = os.path.join(save_dir, f"prediction_sample_{samples_shown + 1}.png")
+                plt.savefig(save_path)
+                #print(f"Saved prediction image to {save_path}")
+                plt.close(fig)
+                samples_shown += 1
+
+
+
 
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -333,7 +388,7 @@ if __name__ == "__main__":
     ).to(device)
 
     # 방법 2: 간단하게 시작 (우선 이 방법으로 테스트)
-    pos_weight_value = 50.0  # 예시 값, 이 값을 10, 20, 100 등으로 조정하며 테스트
+    pos_weight_value = 8.0  # 예시 값, 이 값을 10, 20, 100 등으로 조정하며 테스트
     print(f"사용한 pos_weight_value: {pos_weight_value}")
     pos_weight = torch.tensor([pos_weight_value], dtype=torch.float).to(device)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
@@ -370,12 +425,12 @@ if __name__ == "__main__":
                 batch_inputs = [bi.to(device) for bi in batch_inputs]
                 batch_labels = batch_labels.to(device)
 
-                outputs = model(batch_inputs)
-                loss = criterion(outputs, batch_labels)
+                outputs_logits = model(batch_inputs)
+                loss = criterion(outputs_logits, batch_labels)
                 total_loss += loss.item() * batch_labels.size(0)
 
-                #acc값 계산
-                preds = (outputs > 0.5).float()
+                outputs_probs = torch.sigmoid(outputs_logits)
+                preds = (outputs_probs > 0.5).float()
 
                 # 진짜 양성/가짜 양성 / 진짜 음성 / 가짜 음성 계산
                 tp = (preds * batch_labels).sum().item()  # 진짜 양성
@@ -406,8 +461,12 @@ if __name__ == "__main__":
         }   
 
         return metrics
-
-    num_epochs = 20
+        # --- [여기에 history 딕셔너리 초기화 추가 또는 확인] ---
+    history = {
+        'train_loss': [], 'val_loss': [], 'val_accuracy': [],
+        'val_precision': [], 'val_recall': [], 'val_f1_score': [], 'val_iou': []
+    }
+    num_epochs = 30
     best_val_loss = float("inf")
 
     for epoch in range(1, num_epochs + 1):
@@ -422,6 +481,49 @@ if __name__ == "__main__":
             f"Recall: {val_metrics['recall']:.10f} | "
             f"F1: {val_metrics['f1_score']:.10f} | "
             f"IoU: {val_metrics['iou']:.10f}")
+        
+        # 결과 저장
+        history['train_loss'].append(train_loss)
+        if val_loader:
+            history['val_loss'].append(val_metrics['loss'])
+            history['val_accuracy'].append(val_metrics['accuracy'])
+            history['val_precision'].append(val_metrics['precision'])
+            history['val_recall'].append(val_metrics['recall'])
+            history['val_f1_score'].append(val_metrics['f1_score'])
+            history['val_iou'].append(val_metrics['iou'])
+        else: # 그래프 에러 방지를 위해 nan 또는 기본값으로 채움
+            history['val_loss'].append(float('nan'))
+            history['val_accuracy'].append(float('nan'))
+            history['val_precision'].append(float('nan'))
+            history['val_recall'].append(float('nan'))
+            history['val_f1_score'].append(float('nan'))
+            history['val_iou'].append(float('nan'))
+
+        epochs_range = range(1, epoch + 1)
+        plt.figure(figsize=(20, 12))
+        
+                # Loss 그래프
+        plt.subplot(2, 3, 1)
+        plt.plot(epochs_range, history['train_loss'], 'bo-', label='Training Loss')
+        if val_loader and len(history['val_loss']) > 0: # val_loss 데이터가 있을 때만 그림
+            plt.plot(epochs_range, history['val_loss'], 'ro-', label='Validation Loss')
+        plt.title('Training and Validation Loss'); plt.xlabel('Epoch'); plt.ylabel('Loss'); plt.legend()
+        plt.grid(True) # 그리드 추가
+
+        # 나머지 지표 그래프 (val_loader가 있고, 해당 지표 데이터가 있을 때만 그림)
+        if val_loader:
+            metrics_to_plot = ['accuracy', 'precision', 'recall', 'f1_score', 'iou']
+            plot_colors = ['g', 'm', 'c', 'y', 'k'] # 색상 지정
+            for i, metric_name in enumerate(metrics_to_plot):
+                if any(not np.isnan(x) for x in history[f'val_{metric_name}']):
+                    plt.subplot(2, 3, i + 2)
+                    plt.plot(epochs_range, history[f'val_{metric_name}'], color=plot_colors[i], linestyle='-', marker='s', label=f'Validation {metric_name.capitalize()}')
+                    plt.title(f'Validation {metric_name.capitalize()}'); plt.xlabel('Epoch'); plt.ylabel(metric_name.capitalize()); plt.legend()
+
+        plt.tight_layout()
+        plt.savefig("training_history_metrics.png")
+        #print("Saved training history metrics graph to training_history_metrics.png")
+        plt.close()
 
         # 검증 손실이 좋아질 때만 모델 저장
         if val_metrics['loss'] < best_val_loss:
